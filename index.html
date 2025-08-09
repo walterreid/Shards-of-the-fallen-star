@@ -492,13 +492,13 @@ class MainScene extends Phaser.Scene{
   playerInvuln(ms){ if(this.invulnTimer && this.invulnTimer.getProgress()<1) this.invulnTimer.remove(false); this.player.invuln=true; this.invulnTimer=this.time.delayedCall(ms,()=>this.player.invuln=false); }
 
   // Enemies
-  spawnWraith(){ const ang=Math.random()*Math.PI*2, r=500+Math.random()*300;
+  spawnWraith(){ const ang=this.SR()*Math.PI*2, r=500+this.SR()*300;
     const x=this.player.x+Math.cos(ang)*r, y=this.player.y+Math.sin(ang)*r;
     const key=this.biome==='icy'?'frost':(this.biome==='crystal'?'prism':'wraith');
     const w=this.wraiths.create(x,y,key); w.hp=24; return w; }
 
   spawnFrostling(){ if(this.biome!=='icy') return;
-    const ang=Math.random()*Math.PI*2, r=520+Math.random()*320;
+    const ang=this.SR()*Math.PI*2, r=520+this.SR()*320;
     const x=this.player.x+Math.cos(ang)*r, y=this.player.y+Math.sin(ang)*r;
     const f=this.frostlings.create(x,y,'frost'); f.hp=30;
     this.time.addEvent({delay:1400,loop:true,callback:()=>{ if(!f.active||this.state==='ESCAPE') return;
@@ -507,7 +507,7 @@ class MainScene extends Phaser.Scene{
     return f; }
 
   spawnPrismCrawler(){ if(this.biome!=='crystal') return;
-    const ang=Math.random()*Math.PI*2, r=520+Math.random()*320;
+    const ang=this.SR()*Math.PI*2, r=520+this.SR()*320;
     const x=this.player.x+Math.cos(ang)*r, y=this.player.y+Math.sin(ang)*r;
     const p=this.prismers.create(x,y,'prism'); p.hp=32;
     this.time.addEvent({delay:1500,loop:true,callback:()=>{ if(!p.active||this.state==='ESCAPE') return;
@@ -530,7 +530,7 @@ class MainScene extends Phaser.Scene{
   doShatter(x,y){
     const n=10; for(let i=0;i<n;i++){
       const a=i/n*Math.PI*2, o=this.orbs.create(x,y,'orb');
-      this.physics.velocityFromRotation(a,120+Math.random()*60,o.body.velocity);
+      this.physics.velocityFromRotation(a,120+this.SR()*60,o.body.velocity);
     }
     // Self damage if close
     const dx=this.player.x-x, dy=this.player.y-y, d=Math.hypot(dx,dy);
@@ -603,9 +603,9 @@ class MainScene extends Phaser.Scene{
     this.flashTip('Gravity collapse! Reach the ship!');
     this.tweens.add({targets:this.islands,props:{y:{value:'+=120',duration:28000,ease:'Sine.in'}}});
     this.time.addEvent({delay:1000,loop:true,callback:()=>{ if(this.state!=='ESCAPE') return;
-      if(Math.random()<0.5*this.vars.extraWraithRate) this.spawnWraith();
-      if(this.biome==='icy' && Math.random()<0.35) this.spawnFrostling();
-      if(this.biome==='crystal' && Math.random()<0.35) this.spawnPrismCrawler();
+      if(this.SR()<0.5*this.vars.extraWraithRate) this.spawnWraith();
+      if(this.biome==='icy' && this.SR()<0.35) this.spawnFrostling();
+      if(this.biome==='crystal' && this.SR()<0.35) this.spawnPrismCrawler();
       this.gravityPulse(); }});
     this.minimapScale=1.2;
   }
@@ -676,6 +676,8 @@ class MainScene extends Phaser.Scene{
     this.minimap=this.add.graphics().setScrollFactor(0).setDepth(90);
     this.minimapX=W-170; this.minimapY=12; this.minimapW=160; this.minimapH=100;
     this.worldBB=this.getWorldBoundsFromIslands(); this.minimapScale=1.0;
+    // draw once initially so it's visible immediately
+    this.drawMiniMap();
   }
   getWorldBoundsFromIslands(){
     let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
@@ -764,15 +766,15 @@ class MainScene extends Phaser.Scene{
 
     // Enemy spawn pacing
     this.wraithSpawnT+=dt; const spawnEvery=(this.options.difficulty==='hard'?3.0:3.5)/this.vars.extraWraithRate;
-    if(this.state!=='ESCAPE' && this.wraithSpawnT>spawnEvery){ this.wraithSpawnT=0; if(Math.random()<0.85) this.spawnWraith(); }
-    this.wraiths.children.each(w=>{ if(!w.active) return; const a=Phaser.Math.Angle.Between(w.x,w.y,this.player.x,this.player.y); this.physics.velocityFromRotation(a,90+Math.random()*40,w.body.velocity); });
+    if(this.state!=='ESCAPE' && this.wraithSpawnT>spawnEvery){ this.wraithSpawnT=0; if(this.SR()<0.85) this.spawnWraith(); }
+    this.wraiths.children.each(w=>{ if(!w.active) return; const a=Phaser.Math.Angle.Between(w.x,w.y,this.player.x,this.player.y); this.physics.velocityFromRotation(a,90+this.SR()*40,w.body.velocity); });
 
     if(this.biome==='icy'){
-      this.frostSpawnT+=dt; if(this.state!=='ESCAPE' && this.frostSpawnT>4.5){ this.frostSpawnT=0; if(Math.random()<0.7) this.spawnFrostling(); }
+      this.frostSpawnT+=dt; if(this.state!=='ESCAPE' && this.frostSpawnT>4.5){ this.frostSpawnT=0; if(this.SR()<0.7) this.spawnFrostling(); }
       this.frostlings.children.each(f=>{ if(!f.active) return; const a=Phaser.Math.Angle.Between(f.x,f.y,this.player.x,this.player.y); this.physics.velocityFromRotation(a,70,f.body.velocity); });
     }
     if(this.biome==='crystal'){
-      this.prismSpawnT+=dt; if(this.state!=='ESCAPE' && this.prismSpawnT>4.0){ this.prismSpawnT=0; if(Math.random()<0.7) this.spawnPrismCrawler(); }
+      this.prismSpawnT+=dt; if(this.state!=='ESCAPE' && this.prismSpawnT>4.0){ this.prismSpawnT=0; if(this.SR()<0.7) this.spawnPrismCrawler(); }
       this.prismers.children.each(p=>{ if(!p.active) return; const a=Phaser.Math.Angle.Between(p.x,p.y,this.player.x,this.player.y); this.physics.velocityFromRotation(a,75,p.body.velocity); });
     }
 

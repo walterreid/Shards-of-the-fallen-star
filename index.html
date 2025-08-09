@@ -487,6 +487,7 @@ class MainScene extends Phaser.Scene{
     if(this.flags.aegis) this.player.shieldMax=Math.min(this.player.shieldMax, this.vars.shieldCap);
     this.addTraitBadge({short:t.short,color:t.color});
     this.flashNote(`${t.id} acquired`);
+    this.showTraitTip(t.id, t.desc||'');
   }
   playerInvuln(ms){ if(this.invulnTimer && this.invulnTimer.getProgress()<1) this.invulnTimer.remove(false); this.player.invuln=true; this.invulnTimer=this.time.delayedCall(ms,()=>this.player.invuln=false); }
 
@@ -634,6 +635,11 @@ class MainScene extends Phaser.Scene{
     if(this.tutorial){
       this.flashTip('Tutorial: Move with WASD/Arrows. Space to jump.');
     }
+
+    // Trait tooltip (bottom-right)
+    this.traitTipBg=this.add.graphics().setScrollFactor(0).setDepth(101);
+    this.traitTipText=this.add.text(W-12,H-12,'',{fontFamily:'monospace',fontSize:12,color:'#c9d4ff',align:'right',wordWrap:{width:280}}).setOrigin(1,1).setScrollFactor(0).setDepth(102);
+    this.traitTipHideT=0;
   }
   addTraitBadge(tr){
     const idx=this.badges.length, grp=this.add.container(0,0);
@@ -649,6 +655,16 @@ class MainScene extends Phaser.Scene{
   }
   flashTip(t){ this.tip.setText(t); this.time.delayedCall(3800,()=>this.tip.setText('')); }
   flashNote(t,ms=1200){ this.note.setText(t); this.time.delayedCall(ms,()=>this.note.setText('')); }
+
+  showTraitTip(title, desc){
+    const pad=8;
+    const text=`${title}\n${desc}`;
+    this.traitTipText.setText(text);
+    const b=this.traitTipText.getBounds();
+    this.traitTipBg.clear().fillStyle(0x0f1526,0.95).fillRoundedRect(b.x-pad,b.y-pad,b.width+pad*2,b.height+pad*2,8).lineStyle(1,COLORS.ui,1).strokeRoundedRect(b.x-pad,b.y-pad,b.width+pad*2,b.height+pad*2,8);
+    this.traitTipBg.setVisible(true); this.traitTipText.setVisible(true);
+    this.traitTipHideT=this.time.now+4200;
+  }
 
   bindPauseUI(){
     const upd=()=>{ this.options.sfx=optSfx.checked; SFX.enabled=this.options.sfx; this.options.shake=optShake.checked; this.options.difficulty=optDiff.value; saveOptions(this.options); };
@@ -675,8 +691,18 @@ class MainScene extends Phaser.Scene{
     const toMini=(wx,wy)=>({mx:ox+(wx-bb.minX)*s,my:oy+(wy-bb.minY)*s});
     const islCol=this.biome==='icy'?0x4b6b8d:(this.biome==='crystal'?0x2f6b66:0x42557a);
     g.fillStyle(islCol,1); this.islands.forEach(p=>{ const m=toMini(p.x,p.y); g.fillRect(m.mx-8,m.my-3,16,6); });
+    // Shards
     g.fillStyle(0xd0b3ff,1); this.shards.children.each(s=>{ if(!s.active) return; const m=toMini(s.x,s.y); g.fillCircle(m.mx,m.my,3); });
+    // Exit ship
     if(this.ship.visible){ const m=toMini(this.ship.x,this.ship.y); g.fillStyle(COLORS.lime,1).fillCircle(m.mx,m.my,3); }
+    // Enemies
+    const drawEnemies=(group,col)=>group.children.each(e=>{ if(!e.active) return; const m=toMini(e.x,e.y); g.fillStyle(col,1).fillCircle(m.mx,m.my,2); });
+    drawEnemies(this.wraiths, COLORS.violet);
+    drawEnemies(this.frostlings, 0x9de0ff);
+    drawEnemies(this.prismers, 0xb7ffea);
+    // Boss (bigger dot)
+    if(this.boss && this.boss.active){ const m=toMini(this.boss.x,this.boss.y); g.fillStyle(COLORS.red,1).fillCircle(m.mx,m.my,3.5); }
+    // Player
     const mp=toMini(this.player.x,this.player.y); g.fillStyle(COLORS.cyan,1).fillCircle(mp.mx,mp.my,3);
   }
 
@@ -822,6 +848,9 @@ class MainScene extends Phaser.Scene{
 
     // Enemy HP bars
     this.drawEnemyHpBars();
+
+    // Hide trait tip after timeout
+    if(this.traitTipHideT && this.time.now>this.traitTipHideT){ this.traitTipHideT=0; this.traitTipBg.clear(); this.traitTipText.setText(''); }
 
     // Magnetstride: flag active when near island top edge
     if(this.flags.magnet){

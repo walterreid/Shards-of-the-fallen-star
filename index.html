@@ -554,7 +554,11 @@ class MainScene extends Phaser.Scene{
     if(p===0){ for(let i=0;i<3;i++) this.time.delayedCall(i*150,()=>this.fireAimedOrb(140)); }
     else if(p===1){ const n=10; for(let i=0;i<n;i++){ const a=(i/n)*Math.PI*2; this.fireOrbAngle(a,110); } }
     else if(p===2){ const a=Phaser.Math.Angle.Between(this.boss.x,this.boss.y,this.player.x,this.player.y); const v={x:Math.cos(a)*260,y:Math.sin(a)*260};
-      this.boss.setVelocity(v.x,v.y); this.time.delayedCall(450,()=>{ this.boss.setVelocity(0,0); for(let i=0;i<8;i++){ const th=i/8*Math.PI*2; this.fireOrbAngle(th,130); }}); }
+      this.boss.setVelocity(v.x,v.y); this.time.delayedCall(450,()=>{
+        if(!this.boss || !this.boss.active || this.state==='ESCAPE') return;
+        this.boss.setVelocity(0,0);
+        for(let i=0;i<8;i++){ const th=i/8*Math.PI*2; this.fireOrbAngle(th,130); }
+      }); }
     else if(p===3){ for(let i=0;i<2;i++) this.spawnWraith(); if(this.biome==='icy') this.spawnFrostling(); if(this.biome==='crystal') this.spawnPrismCrawler(); }
   }
   spawnSeraph(){
@@ -574,8 +578,9 @@ class MainScene extends Phaser.Scene{
     else if(p===1){ const a=Phaser.Math.Angle.Between(this.boss.x,this.boss.y,this.player.x,this.player.y); for(let i=-3;i<=3;i++){ this.fireOrbAngle(a+i*0.08,140); }
       const beam=this.add.rectangle(this.boss.x,this.boss.y,4,60,0xff7799,0.6).setDepth(7); this.tweens.add({targets:beam,alpha:0,duration:280,onComplete:()=>beam.destroy()}); }
     else if(p===2){ for(let i=0;i<2;i++) this.spawnWraith(); if(this.biome==='icy') this.spawnFrostling(); if(this.biome==='crystal') this.spawnPrismCrawler();
+      if(!this.boss || !this.boss.active) return;
       const tx=this.exitIsland.x+this.sJ(0,160), ty=this.exitIsland.y-120+this.sJ(0,80);
-      this.tweens.add({targets:this.boss,alpha:0.2,duration:120,yoyo:true,onYoyo:()=>{ this.boss.setPosition(tx,ty); }}); }
+      this.tweens.add({targets:this.boss,alpha:0.2,duration:120,yoyo:true,onYoyo:()=>{ if(this.boss && this.boss.active) this.boss.setPosition(tx,ty); }}); }
   }
   hitBoss(b,boss){
     const dmg=(b.getData('dmg')||this.player.bulletDamage)*this.vars.dmgOutMult*this.combatDamageMult();
@@ -585,8 +590,8 @@ class MainScene extends Phaser.Scene{
     if(pierceLeft>0){ b.setData('pierce',pierceLeft-1); } else { b.destroy(); }
     if(boss.hp<=0){ this.killBoss(); }
   }
-  fireAimedOrb(speed){ const o=this.orbs.create(this.boss.x,this.boss.y,'orb'); const a=Phaser.Math.Angle.Between(this.boss.x,this.boss.y,this.player.x,this.player.y); this.physics.velocityFromRotation(a,speed,o.body.velocity); }
-  fireOrbAngle(a,speed){ const o=this.orbs.create(this.boss.x,this.boss.y,'orb'); this.physics.velocityFromRotation(a,speed,o.body.velocity); }
+  fireAimedOrb(speed){ if(!this.boss || !this.boss.active) return; const o=this.orbs.create(this.boss.x,this.boss.y,'orb'); const a=Phaser.Math.Angle.Between(this.boss.x,this.boss.y,this.player.x,this.player.y); this.physics.velocityFromRotation(a,speed,o.body.velocity); }
+  fireOrbAngle(a,speed){ if(!this.boss || !this.boss.active) return; const o=this.orbs.create(this.boss.x,this.boss.y,'orb'); this.physics.velocityFromRotation(a,speed,o.body.velocity); }
   killBoss(){ if(this.options.shake) this.cameras.main.shake(240,0.004); this.cameras.main.flash(180,255,90,90); if(SFX.enabled) SFX.bossBurst(); this.boss.destroy(); this.boss=null; if(this.bossEvent) this.bossEvent.remove(); this.startCollapse(); }
 
   /* Collapse & end */

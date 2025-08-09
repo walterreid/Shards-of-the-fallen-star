@@ -1,0 +1,950 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Shards of the Fallen Star — v0.7</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+  <style>
+    html,body{margin:0;background:#0b0d14;color:#e6e6f0;font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial}
+    #game{display:block;margin:0 auto;max-width:960px}
+    .ui{position:fixed;left:50%;transform:translateX(-50%);top:10px;width:960px;pointer-events:none}
+    .menu{pointer-events:auto;display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap}
+    .menu input{background:#131a2c;border:1px solid #3b486a;color:#e6e6f0;padding:8px 10px;border-radius:6px;min-width:260px}
+    .menu button{background:#a0ff6b;border:0;color:#0b0d14;padding:8px 12px;border-radius:6px;font-weight:600;cursor:pointer}
+    .menu .ghost{background:#131a2c;color:#c9d4ff;border:1px solid #3b486a}
+    .codex{pointer-events:auto;margin-top:8px;text-align:center;color:#c9d4ff;font-size:12px}
+    .hidden{display:none}
+    .panel{pointer-events:auto;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);
+           background:#0f1526;border:1px solid #3b486a;border-radius:12px;padding:14px 16px;min-width:340px;max-width:560px}
+    .panel h3{margin:0 0 8px 0;font-size:16px}
+    .row{display:flex;align-items:center;justify-content:space-between;margin:6px 0}
+    .row label{font-size:13px;color:#d5dbff}
+    .row input[type=checkbox]{transform:scale(1.1)}
+    .row select{background:#131a2c;color:#e6e6f0;border:1px solid #3b486a;border-radius:6px;padding:4px 6px}
+    .help{margin-top:10px;font-size:12px;color:#9eb1ff}
+    .btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+    .btn{background:#a0ff6b;border:0;color:#0b0d14;padding:8px 12px;border-radius:6px;font-weight:600;cursor:pointer}
+    .btn.ghost{background:#131a2c;color:#c9d4ff;border:1px solid #3b486a}
+    .kv{font-family:monospace;font-size:12px;color:#c9d4ff;line-height:1.4}
+    .splash{pointer-events:auto}
+  </style>
+</head>
+<body>
+  <div id="game"></div>
+
+  <div class="ui">
+    <!-- Menu -->
+    <div id="menu" class="menu hidden">
+      <input id="seed" placeholder="Seed (leave blank for random)" />
+      <button id="newrun">New Run</button>
+      <button id="continue">Continue Last Seed</button>
+      <button id="daily" class="ghost">Daily Challenge</button>
+      <button id="copySeed" class="ghost">Copy Seed</button>
+    </div>
+    <div id="codex" class="codex"></div>
+
+    <!-- Pause / Options -->
+    <div id="pause" class="panel hidden">
+      <h3>Paused — Options</h3>
+      <div class="row"><label>Sound FX</label><input id="optSfx" type="checkbox" checked /></div>
+      <div class="row"><label>Screen Shake</label><input id="optShake" type="checkbox" checked /></div>
+      <div class="row"><label>Difficulty</label>
+        <select id="optDiff">
+          <option value="normal" selected>Normal</option>
+          <option value="hard">Hard</option>
+        </select>
+      </div>
+      <div class="help">WASD/Arrows • Space jump • Shift sprint • Right‑Click blink • Hold Left‑Click to charge • P pause • R restart</div>
+    </div>
+
+    <!-- Story Splash -->
+    <div id="splash" class="panel hidden splash">
+      <h3>Crash Log</h3>
+      <div id="splashText" class="kv"></div>
+      <div class="btns">
+        <button id="splashStart" class="btn">Begin Run</button>
+      </div>
+    </div>
+
+    <!-- Run Summary -->
+    <div id="summary" class="panel hidden">
+      <h3>Run Summary</h3>
+      <div id="summaryBody" class="kv"></div>
+      <div class="btns">
+        <button id="sumRetry" class="btn">Retry Seed</button>
+        <button id="sumNew" class="btn">New Random Run</button>
+        <button id="sumMenu" class="btn ghost">Back to Menu</button>
+        <button id="sumCopySeed" class="btn ghost">Copy Seed</button>
+        <button id="sumCopyCode" class="btn">Copy Run Code</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* v0.7: 30-trait system, lots of real effects, plus v0.6 features (daily seed, run codes, crystal biome unlock). */
+
+const W=960,H=540;
+const META_KEY='sfs_meta_v07';
+const LAST_SEED_KEY='sfs_last_seed_v07';
+const OPTIONS_KEY='sfs_options_v07';
+
+const COLORS={ bg1:0x0b0d14,bg2:0x131a2c,lava:0xff6a00,ice:0x9de0ff,crystal:0xb7ffea,
+  violet:0x8a5cff,cyan:0x6ee7ff,lime:0xa0ff6b,warning:0xffe66b,red:0xff4365,white:0xffffff,ui:0x3b486a,gold:0xf5d76e };
+
+function hashStringToInt(str){ let h=1779033703 ^ str.length; for(let i=0;i<str.length;i++){ h=Math.imul(h ^ str.charCodeAt(i),3432918353); h=(h<<13)|(h>>>19);} return (h>>>0); }
+function mulberry32(a){ return function(){ let t=a+=0x6D2B79F5; t=Math.imul(t^(t>>>15),t|1); t^=t+Math.imul(t^(t>>>7),t|61); return ((t^(t>>>14))>>>0)/4294967296; } }
+function b64encode(str){ return btoa(unescape(encodeURIComponent(str))); }
+
+function loadMeta(){ try{ return JSON.parse(localStorage.getItem(META_KEY))||{runs:0,wins:0,lifetimeShards:0,unlocked:{StarlightVeil:false,CrystalBiome:false}}; }catch{ return {runs:0,wins:0,lifetimeShards:0,unlocked:{StarlightVeil:false,CrystalBiome:false}}; } }
+function saveMeta(m){ localStorage.setItem(META_KEY, JSON.stringify(m)); }
+function loadLastSeed(){ return localStorage.getItem(LAST_SEED_KEY)||''; }
+function saveLastSeed(s){ localStorage.setItem(LAST_SEED_KEY, s); }
+function loadOptions(){ try{ return JSON.parse(localStorage.getItem(OPTIONS_KEY))||{sfx:true,shake:true,difficulty:'normal'}; }catch{ return {sfx:true,shake:true,difficulty:'normal'}; } }
+function saveOptions(o){ localStorage.setItem(OPTIONS_KEY, JSON.stringify(o)); }
+
+/* Daily challenge seed (America/New_York) */
+function nyDateString(){
+  const dt=new Date();
+  const parts=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(dt);
+  const y=parts.find(p=>p.type==='year').value, m=parts.find(p=>p.type==='month').value, d=parts.find(p=>p.type==='day').value;
+  return `${y}${m}${d}`;
+}
+function dailySeed(){ return `daily-${nyDateString()}`; }
+
+/* SFX */
+const SFX={ ctx:null, enabled:true,
+  ensure(){ if(!this.ctx){ this.ctx=new (window.AudioContext||window.webkitAudioContext)(); } },
+  beep(type='sine', f=440, ms=120, v=0.06){ if(!this.enabled) return; this.ensure();
+    const o=this.ctx.createOscillator(), g=this.ctx.createGain(); o.type=type; o.frequency.value=f; g.gain.value=v;
+    o.connect(g); g.connect(this.ctx.destination); o.start(); g.gain.exponentialRampToValueAtTime(0.0001,this.ctx.currentTime+ms/1000); o.stop(this.ctx.currentTime+ms/1000);
+  },
+  shoot(){ this.beep('triangle',760,70,0.05); }, pickup(){ this.beep('sine',840,120,0.06); }, hit(){ this.beep('square',220,90,0.05); },
+  bossBurst(){ this.beep('sawtooth',160,180,0.06); }, win(){ this.beep('sine',660,180,0.06); setTimeout(()=>this.beep('sine',880,180,0.06),180); }, lose(){ this.beep('square',180,250,0.06); }
+};
+
+/* --- Traits (30) with implemented effects --- */
+const TRAITS = [
+  // Movement
+  {id:'Pulsebound',short:'Pb',color:0xd966ff,desc:'+spd on hit; HP drains',
+    apply(s){ s.flags.pulsebound=true; s.vars.hpDrain=2; s.vars.hitSpeedBoost=1.12; }},
+  {id:'GravityFavor',short:'Gf',color:0xa0ff6b,desc:'Double jump; stronger pulses',
+    apply(s){ s.player.doubleJump=true; s.vars.gravityPulseForce=180; }},
+  {id:'AuroraStep',short:'As',color:0xa0ff6b,desc:'Right‑click blink; higher cost',
+    apply(s){ s.flags.blink=true; s.vars.blinkCd=1200; s.vars.blinkCost=24; }},
+  {id:'ZephyrChain',short:'Zc',color:0x9bf6ff,desc:'Triple jump; lower jump force',
+    apply(s){ s.vars.extraJumps=2; s.player.jumpForce*=0.85; }},
+  {id:'Magnetstride',short:'Ms',color:0x88aaff,desc:'Brief wall cling',
+    apply(s){ s.flags.magnet=true; s.vars.magnetMs=450; }},
+  {id:'VoidSkater',short:'Vs',color:0x8a5cff,desc:'Keep momentum on air dash',
+    apply(s){ s.flags.skate=true; }},
+
+  // Offense
+  {id:'StarforgedEdge',short:'Se',color:0xf5d76e,desc:'Bullets pierce',
+    apply(s){ s.vars.pierce=2; }},
+  {id:'CometFury',short:'Cf',color:0xffe66b,desc:'Hold to charge x2 dmg; slower',
+    apply(s){ s.flags.charge=true; s.vars.chargeMs=450; s.vars.chargeMult=2.0; }},
+  {id:'Shatterwake',short:'Sw',color:0xff7799,desc:'Kills explode (harmful)',
+    apply(s){ s.flags.shatter=true; s.vars.shatterDmg=14; s.vars.shatterRad=90; }},
+  {id:'EchoAncients',short:'Ea',color:0xf1fa8c,desc:'10% echo; costs energy',
+    apply(s){ s.flags.echo=true; s.vars.echoChance=0.10; s.vars.echoEnergy=8; }},
+  {id:'Flarefang',short:'Ff',color:0xffaa66,desc:'First hit huge; then lull',
+    apply(s){ s.flags.flare=true; s.vars.flareWindow=6000; s.vars.flareFirstMult=3.0; s.vars.flareAfterMult=0.5; s.vars.combatT=0; }},
+  {id:'Blightbite',short:'Bb',color:0x99ffcc,desc:'Bullets poison over time',
+    apply(s){ s.flags.poison=true; s.vars.poisonDps=8; s.vars.poisonMs=1600; }},
+
+  // Defense
+  {id:'Prismheart',short:'Ph',color:0x9bf6ff,desc:'Shield on hit; -20% bullet dmg',
+    apply(s){ s.flags.prism=true; s.player.bulletDamage*=0.8; s.vars.shieldGainOnHit=8; }},
+  {id:'IronBloom',short:'Ib',color:0xbfd6ff,desc:'Armor while still',
+    apply(s){ s.flags.iron=true; s.vars.armorPerStack=2; s.vars.armorMax=10; }},
+  {id:'SpecterBreath',short:'Sb',color:0xd1c9ff,desc:'15% dodge chance',
+    apply(s){ s.vars.dodgeChance=0.15; }},
+  {id:'AegisLoop',short:'Al',color:0x7fd0ff,desc:'2x shield regen; cap -50%',
+    apply(s){ s.flags.aegis=true; s.vars.shieldCap=20; s.vars.shieldRegen=12; }},
+  {id:'SolarHunger',short:'Sh',color:0xffe6a0,desc:'Regen high; extra dmg low',
+    apply(s){ s.flags.solar=true; s.vars.sunlineY=-150; s.vars.sunRegen=1; s.vars.darknessAmp=1.5; }},
+  {id:'LamentCore',short:'Lc',color:0xff4365,desc:'+50% power on final shard; -20% escape time',
+    apply(s){ s.flags.lament=true; }},
+
+  // Exploration/Utility
+  {id:'OrreryWhisper',short:'Ow',color:0x88aaff,desc:'Reveal path; more spawns',
+    apply(s){ s.flags.orrery=true; s.vars.extraWraithRate=1.5; s.vars.revealLines=true; }},
+  {id:'TemporalVeil',short:'Tv',color:0xd0b3ff,desc:'Slow‑mo at low HP',
+    apply(s){ s.flags.temporal=true; s.vars.temporalCooldown=6000; }},
+  {id:'WraithDebt',short:'Wd',color:0xff99cc,desc:'+enemy shard chance; lose 1 lifetime shard on death',
+    apply(s){ s.flags.debt=true; s.vars.debtDrop=0.12; }},
+  {id:'EclipserEye',short:'Ee',color:0xb7ffea,desc:'Show enemy HP; longer aggro',
+    apply(s){ s.flags.hpBars=true; }},
+  {id:'AuricKey',short:'Ak',color:0xf5d76e,desc:'(Flavor) Better loot rooms',
+    apply(s){ /* cosmetic only for now */ }},
+  {id:'ChronoDrift',short:'Cd',color:0xa0ff6b,desc:'Timer slower when idle; faster when moving',
+    apply(s){ s.flags.chrono=true; s.vars.chronoIdle=0.8; s.vars.chronoMove=1.1; }},
+
+  // Risk–Reward
+  {id:'BloodBloom',short:'Bl',color:0xffa0b2,desc:'+5 max HP per kill; drains vs boss',
+    apply(s){ s.flags.blood=true; }},
+  {id:'HungerEngine',short:'He',color:0xffdd88,desc:'+50% dmg at full HP; -25% under 50% HP',
+    apply(s){ s.flags.hunger=true; }},
+  {id:'ShardEater',short:'Se2',color:0xc9d4ff,desc:'Shard fully heals; -10% score',
+    apply(s){ s.flags.eater=true; }},
+  {id:'StormPact',short:'Sp',color:0x9ecbff,desc:'Lightning zaps foes; might zap you',
+    apply(s){ s.flags.storm=true; }},
+  {id:'FrostVein',short:'Fv',color:0x9de0ff,desc:'Slow aura to foes; icy slows you',
+    apply(s){ s.flags.frostVein=true; s.vars.frostSlow=0.8; }},
+  {id:'GlassSoul',short:'Gs',color:0xf8f1ff,desc:'x2 dmg dealt; x1.5 dmg taken',
+    apply(s){ s.vars.dmgOutMult*=2; s.vars.dmgInMult*=1.5; }}
+];
+
+// Starlight Veil unlock as before
+const TRAIT_UNLOCK={ id:'StarlightVeil', short:'V', color:0xf5d76e, desc:'Shard pickup → brief i-frames',
+  apply(s){ s.flags.veil=true; }};
+
+/* DOM refs */
+const menuDiv=document.getElementById('menu');
+const seedInput=document.getElementById('seed');
+const btnNew=document.getElementById('newrun');
+const btnCont=document.getElementById('continue');
+const btnDaily=document.getElementById('daily');
+const btnCopySeed=document.getElementById('copySeed');
+const codexDiv=document.getElementById('codex');
+
+const pauseDiv=document.getElementById('pause');
+const optSfx=document.getElementById('optSfx');
+const optShake=document.getElementById('optShake');
+const optDiff=document.getElementById('optDiff');
+
+const splashDiv=document.getElementById('splash');
+const splashText=document.getElementById('splashText');
+const splashStart=document.getElementById('splashStart');
+
+const summaryDiv=document.getElementById('summary');
+const summaryBody=document.getElementById('summaryBody');
+const sumRetry=document.getElementById('sumRetry');
+const sumNew=document.getElementById('sumNew');
+const sumMenu=document.getElementById('sumMenu');
+const sumCopySeed=document.getElementById('sumCopySeed');
+const sumCopyCode=document.getElementById('sumCopyCode');
+
+class MenuScene extends Phaser.Scene{
+  constructor(){ super('menu'); }
+  create(){
+    this.cameras.main.setBackgroundColor('#0b0d14');
+    this.add.text(W/2,H/2-64,'Shards of the Fallen Star',{fontFamily:'monospace',fontSize:28,color:'#e6e6f0'}).setOrigin(0.5);
+    this.add.text(W/2,H/2-24,'Crash • Hunt • Escape',{fontFamily:'monospace',fontSize:16,color:'#a0ff6b'}).setOrigin(0.5);
+    this.add.text(W/2,H/2+12,'WASD/Arrows • Space • Shift • Right‑Click • Hold Left‑Click • P • R',{fontFamily:'monospace',fontSize:12,color:'#c9d4ff'}).setOrigin(0.5);
+
+    const meta=loadMeta();
+    if(!meta.unlocked.CrystalBiome && meta.wins>=3){ meta.unlocked.CrystalBiome=true; saveMeta(meta); }
+    const unlocks = [
+      meta.unlocked.StarlightVeil?'Starlight Veil ✓':'Starlight Veil ✗ (6 shards)',
+      meta.unlocked.CrystalBiome?'Crystal Biome ✓':'Crystal Biome ✗ (3 wins)'
+    ].join(' • ');
+    codexDiv.textContent=`Runs ${meta.runs} • Wins ${meta.wins} • Lifetime Shards ${meta.lifetimeShards} • Unlocks: ${unlocks}`;
+
+    menuDiv.classList.remove('hidden');
+    seedInput.value='';
+    btnNew.onclick=()=>{ const seed=seedInput.value.trim()||Math.random().toString(36).slice(2); saveLastSeed(seed); this.scene.start('main',{seed, mode:'normal'}); menuDiv.classList.add('hidden'); };
+    btnCont.onclick=()=>{ const seed=loadLastSeed()||Math.random().toString(36).slice(2); saveLastSeed(seed); this.scene.start('main',{seed, mode:'normal'}); menuDiv.classList.add('hidden'); };
+    btnDaily.onclick=()=>{ const s=dailySeed(); saveLastSeed(s); this.scene.start('main',{seed:s, mode:'daily'}); menuDiv.classList.add('hidden'); };
+    btnCopySeed.onclick=async()=>{ const s=seedInput.value.trim()||loadLastSeed()||''; await navigator.clipboard.writeText(s); btnCopySeed.textContent='Copied!'; setTimeout(()=>btnCopySeed.textContent='Copy Seed',900); };
+  }
+}
+
+class MainScene extends Phaser.Scene{
+  constructor(){ super('main'); this.state='CRASH'; }
+  init(data){ this.seedStr=(data&&data.seed)?String(data.seed):Math.random().toString(36).slice(2); this.runMode=(data&&data.mode)||'normal'; }
+
+  create(){
+    // Meta/options
+    this.meta=loadMeta(); this.meta.runs++; saveMeta(this.meta);
+    this.options=loadOptions(); SFX.enabled=!!this.options.sfx; optSfx.checked=SFX.enabled; optShake.checked=!!this.options.shake; optDiff.value=this.options.difficulty;
+
+    // Seed + RNG
+    this.SR=mulberry32(hashStringToInt(this.seedStr)); saveLastSeed(this.seedStr);
+    const sr=()=>this.SR(); this.sPick=(a)=>a[(sr()*a.length)|0]; this.sJ=(v,s)=>v+(sr()*2-1)*s;
+
+    // Biome pool
+    const pool = this.meta.unlocked.CrystalBiome ? ['volcanic','icy','crystal'] : ['volcanic','icy'];
+    this.biome=this.sPick(pool);
+    this.bossType=(this.options.difficulty==='hard' && sr()<0.5)?'seraph':'colossus';
+
+    // Vars/flags used by traits
+    this.flags={pulsebound:false,blink:false,skate:false,shatter:false,poison:false,flare:false,iron:false,aegis:false,solar:false,lament:false,orrery:false,temporal:false,debt:false,hpBars:false,chrono:false,blood:false,hunger:false,eater:false,storm:false,frostVein:false,veil:false,charge:false};
+    this.vars={hpDrain:0,hitSpeedBoost:1.0,gravityPulseForce:(this.biome==='icy'?110:(this.biome==='crystal'?115:120)),extraWraithRate:(this.options.difficulty==='hard'?1.2:1.0),revealLines:false,blinkCd:1200,blinkCost:24,nextBlink:0,extraJumps:1,magnetMs:0,pierce:0,chargeMs:450,chargeMult:2.0,shatterDmg:0,shatterRad:80,echoChance:0,echoEnergy:8,shieldGainOnHit:0,shieldRegen:0,shieldCap:40,sunlineY:-150,sunRegen:0,darknessAmp:1.0,temporalCooldown:6000,lastTemporal=0,dodgeChance:0,armorPerStack:0,armorMax:0,chron oIdle:1.0,chronoMove:1.0,flareWindow:0,flareFirstMult:1,flareAfterMult:1,combatT:0,poisonDps:0,poisonMs:0,debtDrop:0,frostSlow:1,dmgOutMult:1,dmgInMult:1};
+    // (typo fix)
+    this.vars.chronoIdle=1.0; this.vars.chronoMove=1.0;
+
+    // Background/physics
+    this.cameras.main.setBackgroundColor(COLORS.bg1);
+    this.makeTextures(); this.addGradient();
+    this.physics.world.setBounds(-2700,-2500,5400,5200);
+
+    // Player
+    this.player=this.physics.add.sprite(0,0,'player').setDepth(10).setCollideWorldBounds(true);
+    const baseSpd=(this.biome==='icy'?205:(this.biome==='crystal'?200:195));
+    Object.assign(this.player,{speed:baseSpd,jumpForce:300,canDouble:false,doubleJump:false,dashing:false,
+      hpMax:100,hp:100,shield:0,shieldMax:40,energy:100,energyMax:100,bulletDamage:(this.options.difficulty==='hard'?10:12),pierce:0});
+
+    // World & groups
+    this.shardsCollected=0; this.shardsTarget=3; this.collapseTimer=0; this.collapseTotal=(this.options.difficulty==='hard'?25:30);
+    this.platforms=this.physics.add.staticGroup(); this.jumpRings=this.physics.add.staticGroup();
+    this.makeIslandsSeeded();
+    this.pod=this.physics.add.staticSprite(this.startIsland.x,this.startIsland.y-24,'pod');
+    this.ship=this.physics.add.staticSprite(this.exitIsland.x,this.exitIsland.y-28,'ship').setVisible(false);
+
+    this.shards=this.physics.add.group(); this.spawnShardsSeeded(this.shardsTarget);
+    this.wraiths=this.physics.add.group({collideWorldBounds:true});
+    this.frostlings=this.physics.add.group({collideWorldBounds:true});
+    this.prismers=this.physics.add.group({collideWorldBounds:true});
+    this.orbs=this.physics.add.group(); this.freezeOrbs=this.physics.add.group(); this.prismOrbs=this.physics.add.group();
+    this.bullets=this.physics.add.group(); this.bigBullets=this.physics.add.group(); // charged
+    this.enemyHpGfx=this.add.graphics().setDepth(20).setScrollFactor(1);
+
+    this.wraithSpawnT=0; this.frostSpawnT=0; this.prismSpawnT=0;
+
+    // Particles
+    this.particles=this.add.particles(0,0,'orb').setDepth(5);
+    this.bulletEmitter=this.particles.createEmitter({speed:{min:0,max:20},scale:{start:0.5,end:0},lifespan:300,quantity:1,alpha:{start:0.6,end:0}});
+
+    // Collisions/overlaps
+    this.physics.add.collider(this.player,this.platforms);
+    this.physics.add.overlap(this.player,this.jumpRings,(_,r)=>this.doJumpRing(r));
+    this.physics.add.overlap(this.player,this.shards,(_,s)=>this.collectShard(s));
+
+    const enemies=[this.wraiths,this.frostlings,this.prismers];
+    enemies.forEach(g=>this.physics.add.overlap(this.player,g,(_,e)=>this.playerHit(10,e)));
+    this.physics.add.overlap(this.player,this.orbs,(_,o)=>{o.destroy();this.playerHit(12);});
+    this.physics.add.overlap(this.player,this.freezeOrbs,(_,o)=>{o.destroy();this.applyFreeze(1600);this.playerHit(6);});
+    this.physics.add.overlap(this.player,this.prismOrbs,(_,o)=>{o.destroy();this.applyPrismDebuff(1400);this.playerHit(6);});
+
+    const bulletHit=(b,e)=>{ const dmg=(b.getData('dmg')||this.player.bulletDamage)*this.vars.dmgOutMult*this.combatDamageMult();
+      e.hp-=dmg; if(!b.getData('poisonApplied') && this.flags.poison){ this.applyPoison(e,this.vars.poisonDps,this.vars.poisonMs); b.setData('poisonApplied',true);}
+      let pierceLeft=b.getData('pierce')||0;
+      if(pierceLeft>0){ b.setData('pierce',pierceLeft-1); } else { b.destroy(); }
+      if(e.hp<=0){ this.onEnemyKilled(e); }
+    };
+    enemies.forEach(g=>this.physics.add.overlap(this.bullets,g,(b,e)=>bulletHit(b,e)));
+    enemies.forEach(g=>this.physics.add.overlap(this.bigBullets,g,(b,e)=>bulletHit(b,e)));
+    this.physics.add.overlap(this.bullets,this.orbs,(b,o)=>{o.destroy();b.destroy();});
+    this.physics.add.overlap(this.player,this.ship,()=>this.tryWin());
+
+    // Input/camera
+    this.cursors=this.input.keyboard.createCursorKeys();
+    this.keys=this.input.keyboard.addKeys({W:'W',A:'A',S:'S',D:'D',SHIFT:'SHIFT',R:'R',P:'P'});
+    this.input.on('pointerdown',(p)=>this.pointerDown(p));
+    this.input.on('pointerup',(p)=>this.pointerUp(p));
+    this.input.mouse.disableContextMenu(); // right click blink
+    this.input.on('pointerdown',(p)=>{
+      if(p.rightButtonDown() && this.flags.blink) this.tryBlink();
+    });
+
+    this.cameras.main.startFollow(this.player,true,0.12,0.12);
+
+    // UI
+    this.buildHUD(); this.buildMiniMap(); this.bindPauseUI();
+    this.state='HUNT';
+    this.player.setPosition(this.startIsland.x,this.startIsland.y-40);
+
+    // Story splash
+    this.runTime=0;
+    this.showStorySplash();
+
+    // Gravity pulses, storms
+    this.time.addEvent({delay:4000,loop:true,callback:()=>this.gravityPulse()});
+    if(this.flags.storm) this.time.addEvent({delay:15000,loop:true,callback:()=>this.doStormZap()});
+
+    // Trait assignment on first two shards will happen during play; but give a tiny starter chance:
+    // (intentionally no free traits at start)
+  }
+
+  /* Visuals */
+  makeTextures(){
+    const circle=(k,r,fill)=>{const g=this.add.graphics();g.fillStyle(fill,1).fillCircle(r,r,r);g.generateTexture(k,r*2,r*2);g.destroy();};
+    const rect=(k,w,h,fill)=>{const g=this.add.graphics();g.fillStyle(fill,1).fillRoundedRect(0,0,w,h,Math.min(8,Math.min(w,h)/4));g.generateTexture(k,w,h);g.destroy();};
+    const tri=(k,s,fill)=>{const g=this.add.graphics();g.fillStyle(fill,1).beginPath();g.moveTo(s/2,0);g.lineTo(0,s);g.lineTo(s,s);g.closePath();g.fillPath();g.generateTexture(k,s,s);g.destroy();};
+    circle('player',10,COLORS.cyan);
+    circle('wraith',10,COLORS.violet);
+    circle('frost',10,0x7fd0ff);
+    circle('prism',10,0x9fffd8);
+    circle('orb',5,COLORS.warning);
+    circle('freeze',5,0x9de0ff);
+    circle('prismShot',5,0xb7ffea);
+    rect('platform',120,18, this.biome==='icy'?0x3a4f66:(this.biome==='crystal'?0x2f6b66:0x3b486a));
+    rect('jump',30,6,COLORS.lime);
+    rect('pod',26,18,COLORS.white);
+    rect('ship',36,20,COLORS.lime);
+    tri('shard',18,0xd0b3ff);
+    circle('boss',26,COLORS.red);
+    rect('beam',4,60,0xff7799);
+    circle('lightning',3,0xffffff);
+  }
+  addGradient(){
+    const g=this.add.graphics().setDepth(-5), rows=8;
+    const bgTop=(this.biome==='icy'?0x0b1322:this.biome==='crystal'?0x0c1f1a:COLORS.bg1);
+    const bgBot=(this.biome==='icy'?0x0f1f34:this.biome==='crystal'?0x10362d:COLORS.bg2);
+    for(let i=0;i<rows;i++){
+      const c=Phaser.Display.Color.Interpolate.ColorWithColor(Phaser.Display.Color.IntegerToColor(bgTop),Phaser.Display.Color.IntegerToColor(bgBot),rows-1,i);
+      g.fillStyle(Phaser.Display.Color.GetColor(c.r,c.g,c.b),1).fillRect(-7000,-7000+i*2400,14000,2400);
+    }
+    const coreCol=this.biome==='icy'?COLORS.ice:(this.biome==='crystal'?COLORS.crystal:COLORS.lava);
+    const core=this.add.circle(0,1200,800,coreCol,0.25).setDepth(-4); core.setBlendMode(Phaser.BlendModes.ADD);
+  }
+
+  /* Seed helpers */
+  sPick(a){ return a[(this.SR()*a.length)|0]; }
+  sJ(v,s){ return v+(this.SR()*2-1)*s; }
+
+  /* World gen */
+  makeIslandsSeeded(){
+    this.islands=[];
+    const layout=[{x:0,y:0},{x:300,y:-80},{x:-320,y:-120},{x:520,y:-260},{x:-560,y:-260},{x:820,y:-380},{x:-860,y:-420}];
+    layout.forEach(pt=>{
+      const dx=this.sJ(pt.x,40), dy=this.sJ(pt.y,30);
+      const p=this.platforms.create(dx,dy,'platform').refreshBody();
+      this.islands.push(p);
+      if(this.SR()<0.65){
+        const jr=this.jumpRings.create(dx+(this.SR()<0.5?-80:80),dy-20,'jump');
+        jr.setData('vx',(this.SR()<0.5?-1:1)*(150+this.SR()*120));
+        jr.setData('vy',-(140+this.SR()*100));
+      }
+    });
+    this.startIsland=this.islands[0]; this.exitIsland=this.islands[this.islands.length-1];
+    this.pathLines=this.add.graphics().setDepth(-1);
+  }
+  spawnShardsSeeded(n){
+    const candidates=this.islands.slice(1,this.islands.length-2);
+    const arr=candidates.slice(); for(let i=arr.length-1;i>0;i--){ const j=(this.SR()*(i+1))|0; [arr[i],arr[j]]=[arr[j],arr[i]]; }
+    for(let i=0;i<n;i++){
+      const isl=arr[i%arr.length];
+      const s=this.shards.create(this.sJ(isl.x,40),isl.y-30,'shard'); s.setBounce(0.2).setCollideWorldBounds(true);
+      this.physics.add.collider(s,this.platforms);
+    }
+  }
+
+  /* Interactions */
+  doJumpRing(r){ this.player.setVelocity(r.getData('vx'),r.getData('vy')); this.flashNote('Jump ring boost!'); }
+  pointerDown(p){ this.isCharging=true; this.chargeStart=this.time.now; }
+  pointerUp(p){
+    const held=this.time.now-(this.chargeStart||0);
+    if(this.flags.charge && held>=this.vars.chargeMs) this.shoot(true);
+    else this.shoot(false);
+    this.isCharging=false;
+  }
+
+  collectShard(s){
+    s.destroy(); this.shardsCollected++; this.meta.lifetimeShards++;
+    if(!this.meta.unlocked.StarlightVeil && this.meta.lifetimeShards>=6){ this.meta.unlocked.StarlightVeil=true; this.flashNote('Codex unlock: Starlight Veil!'); }
+    saveMeta(this.meta);
+
+    // Pick a random trait from 30 + unlock
+    const pool=this.getTraitPool().filter(t=>!this.flags[t.id] && !this.player[t.id]);
+    const t=pool.length?this.sPick(pool):this.sPick(this.getTraitPool());
+    this.addTrait(t);
+
+    if(this.flags.veil){ this.playerInvuln(1000); this.cameras.main.flash(150,245,215,110); }
+    if(SFX.enabled) SFX.pickup();
+
+    if(this.shardsCollected>=this.shardsTarget && !this.boss) this.spawnBoss();
+    else this.flashTip(`Shard ${this.shardsCollected}/${this.shardsTarget} acquired.`);
+    this.refreshCodexText();
+    if(this.flags.eater){ this.player.hp=this.player.hpMax; }
+  }
+  getTraitPool(){ const base=TRAITS.slice(); if(loadMeta().unlocked.StarlightVeil) base.push(TRAIT_UNLOCK); return base; }
+  addTrait(t){
+    t.apply(this); this.flags[t.id]=true; this.player[t.id]=true;
+    // sync vars to player where needed
+    this.player.pierce=this.vars.pierce;
+    if(this.flags.aegis) this.player.shieldMax=Math.min(this.player.shieldMax, this.vars.shieldCap);
+    this.addTraitBadge({short:t.short,color:t.color});
+    this.flashNote(`${t.id} acquired`);
+  }
+  playerInvuln(ms){ if(this.invulnTimer && this.invulnTimer.getProgress()<1) this.invulnTimer.remove(false); this.player.invuln=true; this.invulnTimer=this.time.delayedCall(ms,()=>this.player.invuln=false); }
+
+  // Enemies
+  spawnWraith(){ const ang=Math.random()*Math.PI*2, r=500+Math.random()*300;
+    const x=this.player.x+Math.cos(ang)*r, y=this.player.y+Math.sin(ang)*r;
+    const key=this.biome==='icy'?'frost':(this.biome==='crystal'?'prism':'wraith');
+    const w=this.wraiths.create(x,y,key); w.hp=24; return w; }
+
+  spawnFrostling(){ if(this.biome!=='icy') return;
+    const ang=Math.random()*Math.PI*2, r=520+Math.random()*320;
+    const x=this.player.x+Math.cos(ang)*r, y=this.player.y+Math.sin(ang)*r;
+    const f=this.frostlings.create(x,y,'frost'); f.hp=30;
+    this.time.addEvent({delay:1400,loop:true,callback:()=>{ if(!f.active||this.state==='ESCAPE') return;
+      const a=Phaser.Math.Angle.Between(f.x,f.y,this.player.x,this.player.y);
+      const o=this.freezeOrbs.create(f.x,f.y,'freeze'); this.physics.velocityFromRotation(a,90,o.body.velocity); }});
+    return f; }
+
+  spawnPrismCrawler(){ if(this.biome!=='crystal') return;
+    const ang=Math.random()*Math.PI*2, r=520+Math.random()*320;
+    const x=this.player.x+Math.cos(ang)*r, y=this.player.y+Math.sin(ang)*r;
+    const p=this.prismers.create(x,y,'prism'); p.hp=32;
+    this.time.addEvent({delay:1500,loop:true,callback:()=>{ if(!p.active||this.state==='ESCAPE') return;
+      const a=Phaser.Math.Angle.Between(p.x,p.y,this.player.x,this.player.y);
+      for(let i=-1;i<=1;i++){ const o=this.prismOrbs.create(p.x,p.y,'prismShot'); this.physics.velocityFromRotation(a+i*0.12,110,o.body.velocity); }
+    }});
+    return p;
+  }
+
+  applyPoison(e,dps,ms){
+    const end=this.time.now+ms; e.setData('poisonEnd',end); e.setData('poisonDps',dps);
+  }
+
+  onEnemyKilled(e){
+    if(this.flags.blood){ this.player.hpMax+=5; this.player.hp=Math.min(this.player.hpMax, this.player.hp+5); }
+    if(this.flags.shatter){ this.doShatter(e.x,e.y); }
+    e.destroy();
+  }
+
+  doShatter(x,y){
+    const n=10; for(let i=0;i<n;i++){
+      const a=i/n*Math.PI*2, o=this.orbs.create(x,y,'orb');
+      this.physics.velocityFromRotation(a,120+Math.random()*60,o.body.velocity);
+    }
+    // Self damage if close
+    const dx=this.player.x-x, dy=this.player.y-y, d=Math.hypot(dx,dy);
+    if(d<this.vars.shatterRad) this.playerHit(this.vars.shatterDmg);
+  }
+
+  // Bosses (as v0.6)
+  spawnBoss(){ (this.bossType==='seraph') ? this.spawnSeraph() : this.spawnColossus(); }
+  spawnColossus(){
+    this.flashTip('Final shard signal: Wraith Colossus incoming!');
+    this.boss=this.physics.add.sprite(this.exitIsland.x+40,this.exitIsland.y-80,'boss').setDepth(6);
+    this.boss.hp=(this.options.difficulty==='hard'?360:300);
+    this.physics.add.collider(this.boss,this.platforms);
+    this.bossPhase=0;
+    this.bossEvent=this.time.addEvent({delay:1500,loop:true,callback:()=>this.runColossusPattern()});
+    this.physics.add.overlap(this.bullets,this.boss,(b,boss)=>{ this.hitBoss(b,boss); });
+    this.physics.add.overlap(this.bigBullets,this.boss,(b,boss)=>{ this.hitBoss(b,boss); });
+  }
+  runColossusPattern(){
+    if(!this.boss || this.state==='ESCAPE') return;
+    const p=this.bossPhase%4; this.bossPhase++;
+    if(p===0){ for(let i=0;i<3;i++) this.time.delayedCall(i*150,()=>this.fireAimedOrb(140)); }
+    else if(p===1){ const n=10; for(let i=0;i<n;i++){ const a=(i/n)*Math.PI*2; this.fireOrbAngle(a,110); } }
+    else if(p===2){ const a=Phaser.Math.Angle.Between(this.boss.x,this.boss.y,this.player.x,this.player.y); const v={x:Math.cos(a)*260,y:Math.sin(a)*260};
+      this.boss.setVelocity(v.x,v.y); this.time.delayedCall(450,()=>{ this.boss.setVelocity(0,0); for(let i=0;i<8;i++){ const th=i/8*Math.PI*2; this.fireOrbAngle(th,130); }}); }
+    else if(p===3){ for(let i=0;i<2;i++) this.spawnWraith(); if(this.biome==='icy') this.spawnFrostling(); if(this.biome==='crystal') this.spawnPrismCrawler(); }
+  }
+  spawnSeraph(){
+    this.flashTip('Final shard signal: Shard Seraph manifesting!');
+    this.boss=this.physics.add.sprite(this.exitIsland.x+40,this.exitIsland.y-120,'boss').setDepth(6).setScale(0.9);
+    this.boss.hp=(this.options.difficulty==='hard'?380:320);
+    this.physics.add.collider(this.boss,this.platforms);
+    this.seraphPhase=0;
+    this.bossEvent=this.time.addEvent({delay:1400,loop:true,callback:()=>this.runSeraphPattern()});
+    this.physics.add.overlap(this.bullets,this.boss,(b,boss)=>{ this.hitBoss(b,boss); });
+    this.physics.add.overlap(this.bigBullets,this.boss,(b,boss)=>{ this.hitBoss(b,boss); });
+  }
+  runSeraphPattern(){
+    if(!this.boss || this.state==='ESCAPE') return;
+    const p=this.seraphPhase%3; this.seraphPhase++;
+    if(p===0){ const n=16; const base=(this.time.now/400)%(Math.PI*2); for(let i=0;i<n;i++){ const a=base+(i/n)*Math.PI*2; this.fireOrbAngle(a,130); } }
+    else if(p===1){ const a=Phaser.Math.Angle.Between(this.boss.x,this.boss.y,this.player.x,this.player.y); for(let i=-3;i<=3;i++){ this.fireOrbAngle(a+i*0.08,140); }
+      const beam=this.add.rectangle(this.boss.x,this.boss.y,4,60,0xff7799,0.6).setDepth(7); this.tweens.add({targets:beam,alpha:0,duration:280,onComplete:()=>beam.destroy()}); }
+    else if(p===2){ for(let i=0;i<2;i++) this.spawnWraith(); if(this.biome==='icy') this.spawnFrostling(); if(this.biome==='crystal') this.spawnPrismCrawler();
+      const tx=this.exitIsland.x+this.sJ(0,160), ty=this.exitIsland.y-120+this.sJ(0,80);
+      this.tweens.add({targets:this.boss,alpha:0.2,duration:120,yoyo:true,onYoyo:()=>{ this.boss.setPosition(tx,ty); }}); }
+  }
+  hitBoss(b,boss){
+    const dmg=(b.getData('dmg')||this.player.bulletDamage)*this.vars.dmgOutMult*this.combatDamageMult();
+    boss.hp-=dmg;
+    if(this.flags.poison && !b.getData('poisonApplied')){ this.applyPoison(boss,this.vars.poisonDps,this.vars.poisonMs); b.setData('poisonApplied',true); }
+    let pierceLeft=b.getData('pierce')||0;
+    if(pierceLeft>0){ b.setData('pierce',pierceLeft-1); } else { b.destroy(); }
+    if(boss.hp<=0){ this.killBoss(); }
+  }
+  fireAimedOrb(speed){ const o=this.orbs.create(this.boss.x,this.boss.y,'orb'); const a=Phaser.Math.Angle.Between(this.boss.x,this.boss.y,this.player.x,this.player.y); this.physics.velocityFromRotation(a,speed,o.body.velocity); }
+  fireOrbAngle(a,speed){ const o=this.orbs.create(this.boss.x,this.boss.y,'orb'); this.physics.velocityFromRotation(a,speed,o.body.velocity); }
+  killBoss(){ if(this.options.shake) this.cameras.main.shake(240,0.004); this.cameras.main.flash(180,255,90,90); if(SFX.enabled) SFX.bossBurst(); this.boss.destroy(); this.boss=null; if(this.bossEvent) this.bossEvent.remove(); this.startCollapse(); }
+
+  /* Collapse & end */
+  startCollapse(){
+    this.state='ESCAPE'; let time=(this.options.difficulty==='hard'?25:30);
+    if(this.flags.lament){ this.player.bulletDamage*=1.5; time=Math.floor(time*0.8); }
+    this.collapseTotal=time; this.collapseTimer=time; this.ship.setVisible(true);
+    this.flashTip('Gravity collapse! Reach the ship!');
+    this.tweens.add({targets:this.islands,props:{y:{value:'+=120',duration:28000,ease:'Sine.in'}}});
+    this.time.addEvent({delay:1000,loop:true,callback:()=>{ if(this.state!=='ESCAPE') return;
+      if(Math.random()<0.5*this.vars.extraWraithRate) this.spawnWraith();
+      if(this.biome==='icy' && Math.random()<0.35) this.spawnFrostling();
+      if(this.biome==='crystal' && Math.random()<0.35) this.spawnPrismCrawler();
+      this.gravityPulse(); }});
+    this.minimapScale=1.2;
+  }
+  tryWin(){ if(this.state==='ESCAPE' && this.collapseTimer>0) this.win(); }
+  win(){ this.state='WIN'; this.meta.wins++; saveMeta(this.meta); if(SFX.enabled) SFX.win(); this.showRunSummary(true); }
+  gameOver(msg='You fell into the core.'){
+    if(this.gameOvered) return; this.gameOvered=true; this.state='LOSE';
+    if(this.flags.debt){ this.meta.lifetimeShards=Math.max(0,this.meta.lifetimeShards-1); saveMeta(this.meta); }
+    if(SFX.enabled) SFX.lose(); this.flashTip(msg); this.showRunSummary(false, msg);
+  }
+
+  /* HUD / Pause / Minimap */
+  buildHUD(){
+    this.ui=this.add.container(0,0).setScrollFactor(0).setDepth(100);
+    const bar=(x,y,w,h,col)=>{const g=this.add.graphics();g.fillStyle(col,1).fillRoundedRect(x,y,w,h,4);this.ui.add(g);return g;};
+    this.barBG=bar(12,12,300,54,0x263048);
+    this.hpBar=bar(16,16,292,10,0x58e0ff);
+    this.shBar=bar(16,30,292,6,COLORS.gold);
+    this.enBar=bar(16,40,292,6,0x7cff9f);
+    this.cdBar=bar(16,50,292,6,0x9de0ff); // blink/charge hint
+    this.hudText=this.add.text(12,64,'',{fontFamily:'monospace',fontSize:13,color:'#e6e6f0'}).setScrollFactor(0);
+    this.tip=this.add.text(W/2,36,'',{fontFamily:'monospace',fontSize:16,color:'#d0b3ff'}).setOrigin(0.5,0).setScrollFactor(0);
+    this.note=this.add.text(W/2,H-28,'',{fontFamily:'monospace',fontSize:14,color:'#a0ff6b'}).setOrigin(0.5,1).setScrollFactor(0);
+    this.badgeRow=this.add.container(W-12,12).setScrollFactor(0).setDepth(100); this.badges=[];
+    this.refreshCodexText();
+  }
+  addTraitBadge(tr){
+    const idx=this.badges.length, grp=this.add.container(0,0);
+    const x=-(idx*30)-20, y=22;
+    const c=this.add.circle(0,0,12,tr.color,1).setStrokeStyle(2,0x0b0d14,1);
+    const l=this.add.text(-8,-8,tr.short,{fontFamily:'monospace',fontSize:14,color:'#0b0d14'});
+    grp.add(c); grp.add(l); grp.setPosition(x,y); grp.setScrollFactor(0);
+    this.badgeRow.add(grp); this.badges.push(grp);
+  }
+  refreshCodexText(){
+    const u=[this.meta.unlocked.StarlightVeil?'StarlightVeil✓':'StarlightVeil✗',this.meta.unlocked.CrystalBiome?'CrystalBiome✓':'CrystalBiome✗'].join(' ');
+    this.codexText=`Runs ${this.meta.runs}  Wins ${this.meta.wins}  Lifetime Shards ${this.meta.lifetimeShards}  Unlocks: ${u}`;
+  }
+  flashTip(t){ this.tip.setText(t); this.time.delayedCall(3800,()=>this.tip.setText('')); }
+  flashNote(t,ms=1200){ this.note.setText(t); this.time.delayedCall(ms,()=>this.note.setText('')); }
+
+  bindPauseUI(){
+    const upd=()=>{ this.options.sfx=optSfx.checked; SFX.enabled=this.options.sfx; this.options.shake=optShake.checked; this.options.difficulty=optDiff.value; saveOptions(this.options); };
+    optSfx.onchange=upd; optShake.onchange=upd; optDiff.onchange=upd;
+  }
+  togglePause(){ if(this.scene.isPaused()){ this.scene.resume(); pauseDiv.classList.add('hidden'); } else { this.scene.pause(); pauseDiv.classList.remove('hidden'); } }
+
+  buildMiniMap(){
+    this.minimap=this.add.graphics().setScrollFactor(0).setDepth(90);
+    this.minimapX=W-170; this.minimapY=12; this.minimapW=160; this.minimapH=100;
+    this.worldBB=this.getWorldBoundsFromIslands(); this.minimapScale=1.0;
+  }
+  getWorldBoundsFromIslands(){
+    let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+    this.islands.forEach(p=>{ minX=Math.min(minX,p.x-80); maxX=Math.max(maxX,p.x+80); minY=Math.min(minY,p.y-60); maxY=Math.max(maxY,p.y+60); });
+    return {minX,minY,maxX,maxY};
+  }
+  drawMiniMap(){
+    const g=this.minimap, bb=this.worldBB;
+    const pad=6, x=this.minimapX, y=this.minimapY, w=this.minimapW*this.minimapScale, h=this.minimapH*this.minimapScale;
+    g.clear(); g.lineStyle(1,0x3b486a,1).strokeRoundedRect(x,y,w,h,6);
+    const sx=w/(bb.maxX-bb.minX), sy=h/(bb.maxY-bb.minY), s=Math.min(sx,sy);
+    const ox=x+pad + (w-2*pad - (bb.maxX-bb.minX)*s)/2, oy=y+pad + (h-2*pad - (bb.maxY-bb.minY)*s)/2;
+    const toMini=(wx,wy)=>({mx:ox+(wx-bb.minX)*s,my:oy+(wy-bb.minY)*s});
+    const islCol=this.biome==='icy'?0x4b6b8d:(this.biome==='crystal'?0x2f6b66:0x42557a);
+    g.fillStyle(islCol,1); this.islands.forEach(p=>{ const m=toMini(p.x,p.y); g.fillRect(m.mx-8,m.my-3,16,6); });
+    g.fillStyle(0xd0b3ff,1); this.shards.children.each(s=>{ if(!s.active) return; const m=toMini(s.x,s.y); g.fillCircle(m.mx,m.my,3); });
+    if(this.ship.visible){ const m=toMini(this.ship.x,this.ship.y); g.fillStyle(COLORS.lime,1).fillCircle(m.mx,m.my,3); }
+    const mp=toMini(this.player.x,this.player.y); g.fillStyle(COLORS.cyan,1).fillCircle(mp.mx,mp.my,3);
+  }
+
+  /* Update */
+  update(time,dtMs){
+    const dt=dtMs/1000; this.runTime+=dt;
+    if(Phaser.Input.Keyboard.JustDown(this.keys.R)) this.scene.restart({seed:this.seedStr,mode:this.runMode});
+    if(Phaser.Input.Keyboard.JustDown(this.keys.P)) this.togglePause();
+
+    // Movement
+    const k=this.keys,c=this.cursors; let vx=0,vy=0;
+    if(k.A.isDown||c.left.isDown) vx-=1; if(k.D.isDown||c.right.isDown) vx+=1;
+    if(k.W.isDown||c.up.isDown) vy-=1;  if(k.S.isDown||c.down.isDown) vy+=1;
+    const shift=k.SHIFT.isDown, spd=this.player.speed*(shift?1.35:1.0)*(this.flags.pulsebound?1.05:1.0);
+    const norm=Math.hypot(vx,vy)||1, slide=(this.biome==='icy'?0.94:(this.biome==='crystal'?0.92:0.90));
+    this.player.setVelocity(this.player.body.velocity.x*slide+(vx/norm)*spd*0.6, this.player.body.velocity.y*slide+(vy/norm)*spd*0.6);
+
+    // Blink cooldown bar
+    const blinkReady = this.flags.blink ? Math.min(1,(this.time.now-(this.vars.lastBlink||0))/this.vars.blinkCd) : 1;
+    this.cdBar.clear().fillStyle(0x9de0ff,1).fillRoundedRect(16,50,292*blinkReady,6,3);
+
+    // Jump
+    const onGround=this.player.body.blocked.down; if(onGround) this.player.canDouble=true, this.vars.magnetUntil=0;
+    if(Phaser.Input.Keyboard.JustDown(this.cursors.space)){
+      if(onGround) this.player.setVelocityY(-this.player.jumpForce);
+      else if((this.player.doubleJump || this.vars.extraJumps>1) && (this.player.canDouble || this.vars.extraJumps>1)){
+        if(this.vars.extraJumps>1) this.vars.extraJumps--; else this.player.canDouble=false;
+        this.player.setVelocityY(-this.player.jumpForce*0.92); this.flashNote('Extra jump!');
+      }
+    }
+
+    // Magnetstride (simple cling if touching a platform top edge)
+    if(this.flags.magnet && !onGround && this.vars.magnetUntil>this.time.now){
+      this.player.setVelocity(this.player.body.velocity.x*0.8, Math.min(this.player.body.velocity.y, 20));
+    }
+
+    // Regen/drain
+    this.player.energy=Math.min(this.player.energyMax,this.player.energy+14*dt);
+    if(this.flags.pulsebound) this.player.hp=Math.max(1,this.player.hp-this.vars.hpDrain*dt);
+    if(this.flags.aegis){ this.player.shield=Math.min(this.player.shieldMax, this.player.shield + this.vars.shieldRegen*dt); }
+    if(this.flags.solar){
+      if(this.player.y < this.vars.sunlineY) this.player.hp=Math.min(this.player.hpMax, this.player.hp + this.vars.sunRegen*dt);
+    }
+
+    // Poison ticks on enemies/boss
+    const tickPoison=(group)=>group.children.each(e=>{
+      if(!e.active) return;
+      const end=e.getData('poisonEnd')||0;
+      if(this.time.now<end){
+        const dps=e.getData('poisonDps')||0;
+        e.hp-=dps*dt;
+        if(e.hp<=0) this.onEnemyKilled(e);
+      }
+    });
+    tickPoison(this.wraiths); tickPoison(this.frostlings); tickPoison(this.prismers);
+    if(this.boss && this.boss.active){
+      const end=this.boss.getData('poisonEnd')||0; if(this.time.now<end){ const dps=this.boss.getData('poisonDps')||0; this.boss.hp-=dps*dt; if(this.boss.hp<=0) this.killBoss(); }
+    }
+
+    // Enemy spawn pacing
+    this.wraithSpawnT+=dt; const spawnEvery=(this.options.difficulty==='hard'?3.0:3.5)/this.vars.extraWraithRate;
+    if(this.state!=='ESCAPE' && this.wraithSpawnT>spawnEvery){ this.wraithSpawnT=0; if(Math.random()<0.85) this.spawnWraith(); }
+    this.wraiths.children.each(w=>{ if(!w.active) return; const a=Phaser.Math.Angle.Between(w.x,w.y,this.player.x,this.player.y); this.physics.velocityFromRotation(a,90+Math.random()*40,w.body.velocity); });
+
+    if(this.biome==='icy'){
+      this.frostSpawnT+=dt; if(this.state!=='ESCAPE' && this.frostSpawnT>4.5){ this.frostSpawnT=0; if(Math.random()<0.7) this.spawnFrostling(); }
+      this.frostlings.children.each(f=>{ if(!f.active) return; const a=Phaser.Math.Angle.Between(f.x,f.y,this.player.x,this.player.y); this.physics.velocityFromRotation(a,70,f.body.velocity); });
+    }
+    if(this.biome==='crystal'){
+      this.prismSpawnT+=dt; if(this.state!=='ESCAPE' && this.prismSpawnT>4.0){ this.prismSpawnT=0; if(Math.random()<0.7) this.spawnPrismCrawler(); }
+      this.prismers.children.each(p=>{ if(!p.active) return; const a=Phaser.Math.Angle.Between(p.x,p.y,this.player.x,this.player.y); this.physics.velocityFromRotation(a,75,p.body.velocity); });
+    }
+
+    // Temporal Veil (slow-mo once per cooldown)
+    if(this.flags.temporal && this.player.hp/this.player.hpMax<0.2 && (this.vars.lastTemporal||0)+this.vars.temporalCooldown<this.time.now){
+      this.vars.lastTemporal=this.time.now;
+      this.time.timeScale=0.8; this.cameras.main.flash(150,208,179,255);
+      this.time.delayedCall(1200,()=>{ this.time.timeScale=1; });
+    }
+
+    // Iron Bloom armor stacks (stillness)
+    if(this.flags.iron){
+      const moving = Math.hypot(this.player.body.velocity.x,this.player.body.velocity.y)>25;
+      this.vars.armorStacks = this.vars.armorStacks||0;
+      if(!moving) this.vars.armorStacks=Math.min(this.vars.armorMax, (this.vars.armorStacks + this.vars.armorPerStack*dt));
+      else this.vars.armorStacks=Math.max(0, this.vars.armorStacks - this.vars.armorPerStack*2*dt);
+    }
+
+    // Frost Vein aura
+    if(this.flags.frostVein){
+      const slow=0.8;
+      const affect=(g)=>g.children.each(e=>{
+        if(!e.active) return;
+        const d=Phaser.Math.Distance.Between(e.x,e.y,this.player.x,this.player.y);
+        if(d<160){ e.body.velocity.x*=slow; e.body.velocity.y*=slow; }
+      });
+      affect(this.wraiths); affect(this.frostlings); affect(this.prismers);
+      if(this.biome==='icy'){ this.player.speed*=0.99; } // gentle drag
+    }
+
+    // Blood Bloom boss drain
+    if(this.flags.blood && this.boss && this.boss.active){ this.player.hp=Math.max(1,this.player.hp-2*dt); }
+
+    // Chrono Drift adjust collapse timer tick
+    if(this.state==='ESCAPE'){
+      const moving = Math.hypot(this.player.body.velocity.x,this.player.body.velocity.y)>25;
+      const mult = this.flags.chrono ? (moving?this.vars.chronoMove:this.vars.chronoIdle) : 1.0;
+      this.collapseTimer-=dt*mult;
+      if(this.collapseTimer<=0) this.gameOver('The islands collapsed into the core.');
+    }
+
+    // Bullet lifetime + trails
+    this.bullets.children.each(b=>{ if(!b.active) return; if(this.time.now>b.getData('dieT')) b.destroy(); else this.bulletEmitter.emitParticleAt(b.x,b.y,1); });
+    this.bigBullets.children.each(b=>{ if(!b.active) return; if(this.time.now>b.getData('dieT')) b.destroy(); else this.bulletEmitter.emitParticleAt(b.x,b.y,2); });
+
+    // Path lines
+    if(this.vars.revealLines){
+      this.pathLines.clear().lineStyle(1,0x88aaff,0.4);
+      for(let i=0;i<this.islands.length-1;i++){ const a=this.islands[i], b=this.islands[i+1]; this.pathLines.beginPath().moveTo(a.x,a.y-16).lineTo(b.x,b.y-16).strokePath(); }
+    }
+
+    // HUD
+    const hpPct=Math.max(0,this.player.hp/this.player.hpMax), shPct=Math.max(0,this.player.shield/this.player.shieldMax), enPct=Math.max(0,this.player.energy/this.player.energyMax);
+    this.hpBar.clear().fillStyle(0x58e0ff,1).fillRoundedRect(16,16,292*hpPct,10,3);
+    this.shBar.clear().fillStyle(COLORS.gold,1).fillRoundedRect(16,30,292*shPct,6,3);
+    this.enBar.clear().fillStyle(0x7cff9f,1).fillRoundedRect(16,40,292*enPct,6,3);
+    const tState=(this.state==='ESCAPE')?`ESCAPE ${Math.max(0,this.collapseTimer).toFixed(0)}s`:this.state;
+    const traitCount=Object.keys(this.flags).filter(k=>this.flags[k]===true && !['veil'].includes(k)).length;
+    this.hudText.setText(`State ${tState} | Shards ${this.shardsCollected}/${this.shardsTarget} | DMG ${(this.player.bulletDamage*this.vars.dmgOutMult).toFixed(0)} | Seed ${this.seedStr}\nBiome ${this.biome} • Boss ${this.bossType} • Traits ${traitCount}   (P Pause • R Restart)`);
+
+    // Enemy HP bars
+    this.drawEnemyHpBars();
+
+    // Magnetstride: flag active when near island top edge
+    if(this.flags.magnet){
+      let nearEdge=false;
+      this.islands.forEach(p=>{
+        if(Math.abs(this.player.x-p.x)<70 && Math.abs(this.player.y-(p.y-12))<30) nearEdge=true;
+      });
+      if(nearEdge) this.vars.magnetUntil=this.time.now+this.vars.magnetMs;
+    }
+  }
+
+  drawEnemyHpBars(){
+    if(!this.flags.hpBars){ this.enemyHpGfx.clear(); return; }
+    const draw=(g)=>g.children.each(e=>{
+      if(!e.active) return;
+      const max = e.getData('hpMax')|| (e.hp>40?e.hp:40);
+      e.setData('hpMax',max);
+      const pct=Math.max(0,Math.min(1,e.hp/max));
+      this.enemyHpGfx.fillStyle(0x000000,0.5).fillRect(e.x-12,e.y-18,24,3);
+      this.enemyHpGfx.fillStyle(0x7cff9f,1).fillRect(e.x-12,e.y-18,24*pct,3);
+    });
+    this.enemyHpGfx.clear();
+    draw(this.wraiths); draw(this.frostlings); draw(this.prismers);
+    if(this.boss && this.boss.active){
+      const max=this.boss.getData('hpMax')|| (this.boss.hp>360?this.boss.hp:360);
+      this.boss.setData('hpMax',max);
+      const pct=Math.max(0,Math.min(1,this.boss.hp/max));
+      this.enemyHpGfx.fillStyle(0x000000,0.6).fillRect(this.boss.x-30,this.boss.y-40,60,5);
+      this.enemyHpGfx.fillStyle(0xff6a6a,1).fillRect(this.boss.x-30,this.boss.y-40,60*pct,5);
+    }
+  }
+
+  /* Mechanics */
+  gravityPulse(){ const f=this.vars.gravityPulseForce; this.player.body.velocity.y += f*(0.6+Math.random()*0.4); if(this.player.doubleJump) this.flashNote('Gravity pulse!',400); }
+  tryBlink(){
+    if(this.player.energy<this.vars.blinkCost) return;
+    const now=this.time.now; if((this.vars.lastBlink||0)+this.vars.blinkCd>now) return;
+    const ptr=this.input.activePointer; const a=Phaser.Math.Angle.Between(this.player.x,this.player.y,ptr.worldX,ptr.worldY);
+    const dist=160;
+    this.player.setPosition(this.player.x+Math.cos(a)*dist, this.player.y+Math.sin(a)*dist);
+    this.player.energy-=this.vars.blinkCost; this.vars.lastBlink=now; this.cameras.main.flash(60,160,240,240);
+  }
+
+  combatDamageMult(){
+    // Flarefang & Hunger Engine multipliers
+    let m=1.0;
+    if(this.flags.flare){
+      if(this.vars.combatT===0){ m*=this.vars.flareFirstMult; this.vars.combatT=this.time.now; }
+      else if(this.time.now - this.vars.combatT > this.vars.flareWindow){ m*=this.vars.flareAfterMult; }
+    }
+    if(this.flags.hunger){
+      const frac=this.player.hp/this.player.hpMax;
+      if(frac>=0.99) m*=1.5; else if(frac<0.5) m*=0.75;
+    }
+    return m;
+  }
+
+  shoot(charged=false){
+    if(this.gameOvered) return;
+    const cost = charged?12:5;
+    if(this.player.energy<cost) return;
+    this.player.energy-=cost;
+
+    const group = charged?this.bigBullets:this.bullets;
+    const p=group.create(this.player.x,this.player.y,'orb').setDepth(9);
+    const a=Phaser.Math.Angle.Between(this.player.x,this.player.y,this.input.activePointer.worldX,this.input.activePointer.worldY);
+    const speed=charged?430:360;
+    const dmg=(charged? this.player.bulletDamage*this.vars.chargeMult : this.player.bulletDamage);
+    this.physics.velocityFromRotation(a,speed,p.body.velocity);
+    p.setData('dieT',this.time.now+ (charged?2200:1800));
+    p.setData('dmg',dmg);
+    p.setData('pierce',this.player.pierce);
+    if(SFX.enabled) SFX.shoot();
+
+    if(this.flags.echo && Math.random()<this.vars.echoChance && this.player.energy>=this.vars.echoEnergy){
+      this.player.energy-=this.vars.echoEnergy;
+      const p2=group.create(this.player.x,this.player.y,'orb').setDepth(9);
+      this.physics.velocityFromRotation(a, speed, p2.body.velocity);
+      p2.setData('dieT',this.time.now+ (charged?2200:1800));
+      p2.setData('dmg',dmg);
+      p2.setData('pierce',this.player.pierce);
+    }
+  }
+
+  playerHit(dmg, source=null){
+    if(this.player.invuln) return;
+    // Specter dodge
+    if(this.vars.dodgeChance>0 && Math.random()<this.vars.dodgeChance){ this.cameras.main.flash(60,200,200,255); return; }
+
+    // Shield absorb
+    const inDark = this.flags.solar && this.player.y >= this.vars.sunlineY;
+    let realDmg=dmg*this.vars.dmgInMult*(inDark?this.vars.darknessAmp:1.0);
+    if(this.flags.iron){ realDmg=Math.max(0, realDmg - (this.vars.armorStacks||0)); }
+
+    const absorbed=Math.min(this.player.shield,realDmg);
+    this.player.shield-=absorbed; realDmg-=absorbed;
+
+    this.player.hp-=realDmg;
+    if(this.flags.pulsebound){ const v=this.player.body.velocity.clone(); this.player.setVelocity(v.x*this.vars.hitSpeedBoost,v.y*this.vars.hitSpeedBoost); }
+    if(this.flags.prism && Math.random()<0.6){ this.player.shield=Math.min(this.player.shieldMax, this.player.shield+(this.vars.shieldGainOnHit||8)); }
+
+    if(this.options.shake) this.cameras.main.shake(150,0.003);
+    this.cameras.main.flash(90,255,70,70);
+    if(SFX.enabled) SFX.hit();
+    if(this.player.hp<=0) this.gameOver('You were consumed by the Expanse.');
+  }
+
+  applyFreeze(ms){ if(this.freezeTimer && this.freezeTimer.getProgress()<1) this.freezeTimer.remove(false);
+    const base=this.player.speed; this.player.speed=Math.max(120,base*0.6); this.freezeTimer=this.time.delayedCall(ms,()=>{ this.player.speed=base; }); }
+  applyPrismDebuff(ms){ if(this.prismTimer && this.prismTimer.getProgress()<1) this.prismTimer.remove(false);
+    const baseDMG=this.player.bulletDamage; this.player.bulletDamage=Math.max(6, baseDMG*0.8);
+    this.prismTimer=this.time.delayedCall(ms,()=>{ this.player.bulletDamage=baseDMG; }); }
+
+  doStormZap(){
+    // Visual zap line + damage nearby enemies; small chance to tag the player
+    const x=this.player.x + (Math.random()*400-200), y=this.player.y-260;
+    const bolt=this.add.image(x,y,'lightning').setScale(50,1).setAlpha(0.9).setDepth(8);
+    this.tweens.add({targets:bolt,alpha:0,duration:200,onComplete:()=>bolt.destroy()});
+    const affect=(g)=>g.children.each(e=>{ if(!e.active) return; if(Math.abs(e.x-x)<50){ e.hp-=40; if(e.hp<=0) this.onEnemyKilled(e);} });
+    affect(this.wraiths); affect(this.frostlings); affect(this.prismers);
+    if(Math.random()<0.15){ if(Math.abs(this.player.x-x)<50) this.playerHit(18); }
+  }
+
+  // Story splash
+  showStorySplash(){
+    const lines=[
+      'NAV: Signal spike at 42.7 keV. Impact vector unstable. Brace.',
+      'COMMS: If you hear this… follow the star signatures. They bend toward exits.',
+      'LOG: Oxygen nominal. Hull compromised. Collect shards to jump or die trying.',
+      'DRONE: Mapping islands… warning: gravity pulses irregular. Recommend double jump augmentation.',
+      'AI: Your crash scattered the drive core. Shards resonate — they might carry you home.'
+    ];
+    const line = lines[(hashStringToInt(this.seedStr)%lines.length)];
+    splashText.textContent = `${line}\nSeed: ${this.seedStr} • Mode: ${this.runMode} • Biome: ${this.biome.toUpperCase()} • Boss: ${this.bossType}`;
+    splashDiv.classList.remove('hidden');
+    splashStart.onclick=()=>{ splashDiv.classList.add('hidden'); this.flashTip(`CRASH (seed: ${this.seedStr}) — Collect ${this.shardsTarget} shards → ${this.bossType} → escape.`); };
+  }
+
+  /* Run Summary + Run Code */
+  runCodePayload(won){
+    const traitIds=Object.keys(this.flags).filter(k=>this.flags[k]===true);
+    return { v:7, seed:this.seedStr, mode:this.runMode, biome:this.biome, boss:this.bossType, diff:this.options.difficulty,
+      time:Math.round(this.runTime*100)/100, shards:this.shardsCollected, traits:traitIds, result:won?'WIN':'LOSE' };
+  }
+  showRunSummary(won, msg=''){
+    const payload=this.runCodePayload(won);
+    const code=b64encode(JSON.stringify(payload));
+    const timeStr=`${Math.floor(this.runTime).toString().padStart(2,'0')}s`;
+    const traitList=(payload.traits.length?payload.traits.join(', '):'-');
+    const scorePenalty = this.flags.eater? ' (−10% score)' : '';
+    summaryBody.innerHTML =
+      `Result: ${won?'VICTORY':'DEFEAT'}${msg?` — ${msg}`:''}<br>`+
+      `Mode: ${payload.mode} • Biome: ${payload.biome} • Boss: ${payload.boss} • Difficulty: ${payload.diff}<br>`+
+      `Shards: ${payload.shards}/${this.shardsTarget} • Time: ${timeStr}${scorePenalty}<br>`+
+      `Traits: ${traitList}<br>`+
+      `Seed: ${payload.seed}<br>`+
+      `Run Code: ${code.slice(0,32)}… (${code.length} chars)`;
+    summaryDiv.classList.remove('hidden');
+
+    const goMenu=()=>{ summaryDiv.classList.add('hidden'); this.scene.start('menu'); };
+    sumRetry.onclick=()=>{ summaryDiv.classList.add('hidden'); this.scene.restart({seed:this.seedStr,mode:this.runMode}); };
+    sumNew.onclick=()=>{ summaryDiv.classList.add('hidden'); const s=Math.random().toString(36).slice(2); saveLastSeed(s); this.scene.restart({seed:s,mode:'normal'}); };
+    sumMenu.onclick=goMenu;
+    sumCopySeed.onclick=async()=>{ await navigator.clipboard.writeText(this.seedStr); sumCopySeed.textContent='Copied!'; setTimeout(()=>sumCopySeed.textContent='Copy Seed',900); };
+    sumCopyCode.onclick=async()=>{ await navigator.clipboard.writeText(code); sumCopyCode.textContent='Copied!'; setTimeout(()=>sumCopyCode.textContent='Copy Run Code',900); };
+  }
+}
+
+/* Boot */
+const cfg={ type:Phaser.AUTO, width:W, height:H, parent:'game', backgroundColor:'#0b0d14',
+  physics:{default:'arcade',arcade:{gravity:{y:0},debug:false}},
+  scene:[MenuScene, MainScene]
+};
+new Phaser.Game(cfg);
+</script>
+</body>
+</html>

@@ -40,6 +40,7 @@
       <button id="newrun">New Run</button>
       <button id="continue">Continue Last Seed</button>
       <button id="daily" class="ghost">Daily Challenge</button>
+      <button id="tutorial" class="ghost">Tutorial</button>
       <button id="copySeed" class="ghost">Copy Seed</button>
     </div>
     <div id="codex" class="codex"></div>
@@ -207,6 +208,7 @@ const btnNew=document.getElementById('newrun');
 const btnCont=document.getElementById('continue');
 const btnDaily=document.getElementById('daily');
 const btnCopySeed=document.getElementById('copySeed');
+const btnTutorial=document.getElementById('tutorial');
 const codexDiv=document.getElementById('codex');
 
 const pauseDiv=document.getElementById('pause');
@@ -248,6 +250,7 @@ class MenuScene extends Phaser.Scene{
     btnCont.onclick=()=>{ const seed=loadLastSeed()||Math.random().toString(36).slice(2); saveLastSeed(seed); this.scene.start('main',{seed, mode:'normal'}); menuDiv.classList.add('hidden'); };
     btnDaily.onclick=()=>{ const s=dailySeed(); saveLastSeed(s); this.scene.start('main',{seed:s, mode:'daily'}); menuDiv.classList.add('hidden'); };
     btnCopySeed.onclick=async()=>{ const s=seedInput.value.trim()||loadLastSeed()||''; await navigator.clipboard.writeText(s); btnCopySeed.textContent='Copied!'; setTimeout(()=>btnCopySeed.textContent='Copy Seed',900); };
+    btnTutorial.onclick=()=>{ const seed='tutorial'; saveLastSeed(seed); this.scene.start('main',{seed, mode:'tutorial'}); menuDiv.classList.add('hidden'); };
   }
 }
 
@@ -268,6 +271,9 @@ class MainScene extends Phaser.Scene{
     const pool = this.meta.unlocked.CrystalBiome ? ['volcanic','icy','crystal'] : ['volcanic','icy'];
     this.biome=this.sPick(pool);
     this.bossType=(this.options.difficulty==='hard' && sr()<0.5)?'seraph':'colossus';
+
+    // Tutorial flag
+    this.tutorial = (this.runMode==='tutorial');
 
     // Vars/flags used by traits
     this.flags={pulsebound:false,blink:false,skate:false,shatter:false,poison:false,flare:false,iron:false,aegis:false,solar:false,lament:false,orrery:false,temporal:false,debt:false,hpBars:false,chrono:false,blood:false,hunger:false,eater:false,storm:false,frostVein:false,veil:false,charge:false};
@@ -351,9 +357,17 @@ class MainScene extends Phaser.Scene{
     this.state='HUNT';
     this.player.setPosition(this.startIsland.x,this.startIsland.y-40);
 
-    // Story splash
+    // Story / Tutorial splash
     this.runTime=0;
-    this.showStorySplash();
+    if(this.tutorial){
+      // Adjust tutorial parameters
+      this.shardsTarget=1; // One shard to teach the mechanic
+      this.clearAndRespawnShardsForTutorial();
+      this.showTutorialIntro();
+      this.tutStage=0; this.tutMoved=false; this.tutJumped=false; this.tutMsgShown=false;
+    } else {
+      this.showStorySplash();
+    }
 
     // Gravity pulses, storms
     this.time.addEvent({delay:4000,loop:true,callback:()=>this.gravityPulse()});
@@ -425,6 +439,16 @@ class MainScene extends Phaser.Scene{
       const s=this.shards.create(this.sJ(isl.x,40),isl.y-30,'shard'); s.setBounce(0.2).setCollideWorldBounds(true);
       this.physics.add.collider(s,this.platforms);
     }
+  }
+
+  // Tutorial helpers
+  clearAndRespawnShardsForTutorial(){
+    this.shards.clear(true,true);
+    // Place a single shard on the first non-start island
+    const isl=this.islands[1]||this.islands[0];
+    const s=this.shards.create(isl.x, isl.y-30, 'shard');
+    s.setBounce(0.2).setCollideWorldBounds(true);
+    this.physics.add.collider(s,this.platforms);
   }
 
   /* Interactions */
@@ -601,6 +625,10 @@ class MainScene extends Phaser.Scene{
     this.note=this.add.text(W/2,H-28,'',{fontFamily:'monospace',fontSize:14,color:'#a0ff6b'}).setOrigin(0.5,1).setScrollFactor(0);
     this.badgeRow=this.add.container(W-12,12).setScrollFactor(0).setDepth(100); this.badges=[];
     this.refreshCodexText();
+
+    if(this.tutorial){
+      this.flashTip('Tutorial: Move with WASD/Arrows. Space to jump.');
+    }
   }
   addTraitBadge(tr){
     const idx=this.badges.length, grp=this.add.container(0,0);
@@ -774,6 +802,19 @@ class MainScene extends Phaser.Scene{
     const traitCount=Object.keys(this.flags).filter(k=>this.flags[k]===true && !['veil'].includes(k)).length;
     this.hudText.setText(`State ${tState} | Shards ${this.shardsCollected}/${this.shardsTarget} | DMG ${(this.player.bulletDamage*this.vars.dmgOutMult).toFixed(0)} | Seed ${this.seedStr}\nBiome ${this.biome} • Boss ${this.bossType} • Traits ${traitCount}   (P Pause • R Restart)`);
 
+    // Tutorial guidance
+    if(this.tutorial){
+      if(!this.tutMoved && (Math.abs(this.player.body.velocity.x) > 10 || Math.abs(this.player.body.velocity.y) > 10)){
+        this.tutMoved=true; this.flashTip('Good! Press Space to jump.');
+      }
+      if(!this.tutJumped && Phaser.Input.Keyboard.JustDown(this.cursors.space)){
+        this.tutJumped=true; this.flashTip('Collect the glowing shard.');
+      }
+      if(this.shardsCollected>=1 && !this.tutMsgShown){
+        this.tutMsgShown=true; this.flashTip('Final lesson: After the boss, escape before collapse. Press R to retry.');
+      }
+    }
+
     // Enemy HP bars
     this.drawEnemyHpBars();
 
@@ -912,6 +953,14 @@ class MainScene extends Phaser.Scene{
     splashText.textContent = `${line}\nSeed: ${this.seedStr} • Mode: ${this.runMode} • Biome: ${this.biome.toUpperCase()} • Boss: ${this.bossType}`;
     splashDiv.classList.remove('hidden');
     splashStart.onclick=()=>{ splashDiv.classList.add('hidden'); this.flashTip(`CRASH (seed: ${this.seedStr}) — Collect ${this.shardsTarget} shards → ${this.bossType} → escape.`); };
+  }
+
+  // Tutorial intro splash
+  showTutorialIntro(){
+    const line = 'Tutorial: Learn controls and core loop.';
+    splashText.textContent = `${line}\nMove: WASD/Arrows • Jump: Space • Sprint: Shift • Shoot: Left‑Click • Blink: Right‑Click`;
+    splashDiv.classList.remove('hidden');
+    splashStart.onclick=()=>{ splashDiv.classList.add('hidden'); this.flashTip('Move with WASD/Arrows. Then press Space to jump.'); };
   }
 
   /* Run Summary + Run Code */

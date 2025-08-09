@@ -304,8 +304,13 @@ class MainScene extends Phaser.Scene{
     this.wraithSpawnT=0; this.frostSpawnT=0; this.prismSpawnT=0;
 
     // Particles
-    this.particles=this.add.particles(0,0,'orb').setDepth(5);
-    this.bulletEmitter=this.particles.createEmitter({speed:{min:0,max:20},scale:{start:0.5,end:0},lifespan:300,quantity:1,alpha:{start:0.6,end:0}});
+    this.bulletEmitter=this.add.particles(0,0,'orb',{
+      speed:{min:0,max:20},
+      scale:{start:0.5,end:0},
+      lifespan:300,
+      quantity:1,
+      alpha:{start:0.6,end:0}
+    }).setDepth(5);
 
     // Collisions/overlaps
     this.physics.add.collider(this.player,this.platforms);
